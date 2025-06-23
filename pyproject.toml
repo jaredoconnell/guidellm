@@ -59,6 +59,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+vllm = [
+    "vllm~=0.9.1"
+]
+
 dev = [
     # build
     "build>=1.0.0",
