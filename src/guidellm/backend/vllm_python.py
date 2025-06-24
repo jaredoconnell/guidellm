@@ -45,7 +45,8 @@ class VLLMPythonBackend(Backend):
 
     async def check_setup(self):
         """
-        
+        Checks whether the backend is setup correctly.
+        Validates that VLLM is present and that the model requested is present.
         """
         if not VLLM_ENABLED:
             raise ValueError("VLLM not available; ensure the VLLM extra is enabled.")
