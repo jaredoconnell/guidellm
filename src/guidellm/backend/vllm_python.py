@@ -22,6 +22,7 @@ except ImportError:
 # TODO: Handle vLLM not being present.
 
 
+@Backend.register("vllm_python")
 class VLLMPythonBackend(Backend):
     """
     Runs directly with Python.
@@ -32,10 +33,14 @@ class VLLMPythonBackend(Backend):
     def __init__(
         self,
         model: Optional[str] = None,
+        # TODO: Generic keyword args?
     ):
         super().__init__(type_="vllm_python")
 
         self._model = model
+        # TODO: Generic keyword args passed into AsyncEngineArgs
+        # And find the proper vllm documentation for those args.
+        # TODO: Start integrating settings documented here: https://docs.vllm.ai/en/latest/configuration/optimization.html
         args = AsyncEngineArgs(model=model)
         self.llm_engine = AsyncLLMEngine.from_engine_args(args)
 
@@ -53,7 +58,7 @@ class VLLMPythonBackend(Backend):
 
     async def check_setup(self):
         """
-        Checks whether the backend is setup correctly.
+        Checks whether the backend is set up correctly.
         Validates that VLLM is present and that the model requested is present.
         """
         if not VLLM_ENABLED:
@@ -64,12 +69,26 @@ class VLLMPythonBackend(Backend):
         pass
 
     async def available_models(self) -> list[str]:
-        # Do we check the cache or some other directory? ~/.cache/huggingface/hub/
+        # Use get_model_config
         pass
 
     async def text_completions(self, prompt: Union[str, list[str]], request_id: Optional[str] = None,
                                prompt_token_count: Optional[int] = None, output_token_count: Optional[int] = None,
                                **kwargs) -> AsyncGenerator[Union[StreamingTextResponse, ResponseSummary], None]:
+
+        params = SamplingParams(
+            max_tokens=output_token_count,
+            # Set min token count?
+        )
+        start_time = time.time()
+        # TODO: What is prompt token count used for?
+        # TODO: Determine how to make it do chat completions
+        #   For chat, use a chat template. It's a jinja2 template that formats the input.
+        #
+        # TODO: https://docs.vllm.ai/en/v0.6.5/usage/multimodal_inputs.html
+        #  (later, not first first iteration. )
+        llm_generator = self.llm_engine.generate(prompt, params, request_id)
+        return self._handle_llm_output(llm_generator, start_time, request_id)
 
 
     async def chat_completions(self, content: Union[
@@ -79,20 +98,17 @@ class VLLMPythonBackend(Backend):
     ], request_id: Optional[str] = None, prompt_token_count: Optional[int] = None,
                                output_token_count: Optional[int] = None, raw_content: bool = False, **kwargs) -> \
     AsyncGenerator[Union[StreamingTextResponse, ResponseSummary], None]:
-        params = SamplingParams(
-            max_tokens=output_token_count,
-            # Set min token count?
-        )
-        start_time = time.time()
-        llm_generator = self.llm_engine.generate(PromptType.TEXT_COMPLETIONS, params, request_id)
-        return self._handle_llm_output(llm_generator, start_time)
+        # TODO: Determine how to do chat completions
+        # Start with text only completions.
+        print("chat completions called; missing implementation")
+        pass
 
     async def _handle_llm_output(
             self,
             generator: AsyncGenerator[RequestOutput, None],
             start_time: float,
             request_id: Optional[str],
-    ):
+    ) -> AsyncGenerator[Union[StreamingTextResponse, ResponseSummary], None]:
         response_prompt_count: Optional[int] = None
         response_output_count: Optional[int] = None
         iter_count = 0
@@ -133,3 +149,4 @@ class VLLMPythonBackend(Backend):
     @property
     def target(self) -> str:
         return "n/a"
+    # Consider v0 or v1 engine as return values.

@@ -60,7 +60,7 @@ dependencies = [
 
 [project.optional-dependencies]
 vllm = [
-    "vllm~=0.9.1"
+    "vllm" # TODO: Determine which version is needed for the API
 ]
 
 dev = [

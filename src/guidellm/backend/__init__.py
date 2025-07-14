@@ -3,6 +3,7 @@ from .backend import (
     BackendType,
 )
 from .openai import CHAT_COMPLETIONS_PATH, TEXT_COMPLETIONS_PATH, OpenAIHTTPBackend
+from .vllm_python import VLLMPythonBackend
 from .response import (
     RequestArgs,
     ResponseSummary,
@@ -16,8 +17,10 @@ __all__ = [
     "Backend",
     "BackendType",
     "OpenAIHTTPBackend",
+    "VLLMPythonBackend"
     "RequestArgs",
     "ResponseSummary",
     "StreamingResponseType",
     "StreamingTextResponse",
 ]
+

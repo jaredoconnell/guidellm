@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     preferred_output_tokens_source: Optional[
         Literal["request", "response", "local"]
     ] = "response"
-    preferred_backend: Literal["openai"] = "openai"
+    preferred_backend: Literal["openai", "vllm_python"] = "openai"
     preferred_route: Literal["text_completions", "chat_completions"] = (
         "text_completions"
     )
