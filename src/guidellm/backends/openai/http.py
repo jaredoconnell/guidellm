@@ -82,7 +82,7 @@ class OpenAIHttpBackendArgs(BackendArgs):
             "multi-turn requests. Only supported with /v1/responses."
         ),
     )
-    tool_call_missing_behavior: str = Field(
+    tool_call_missing_behavior: Literal["ignore_continue", "ignore_stop", "error_stop"] = Field(
         default="error_stop",
         description=(
             "What happens when a tool call is expected but the model does not "
@@ -91,17 +91,6 @@ class OpenAIHttpBackendArgs(BackendArgs):
             "cancel remaining turns)."
         ),
     )
-
-    @field_validator("tool_call_missing_behavior")
-    @classmethod
-    def validate_tool_call_missing_behavior(cls, v: str) -> str:
-        valid = {"ignore_continue", "ignore_stop", "error_stop"}
-        if v not in valid:
-            raise ValueError(
-                f"Invalid tool_call_missing_behavior '{v}'. "
-                f"Must be one of: {', '.join(sorted(valid))}"
-            )
-        return v
 
     @field_validator("request_format")
     @classmethod
@@ -578,9 +567,9 @@ class OpenAIHTTPBackend(Backend):
         if self.tool_call_missing_behavior == "ignore_continue":
             pass
         elif self.tool_call_missing_behavior == "ignore_stop":
-            request_info.stop_conversation = True
+            raise asyncio.CancelledError("Expected tool call but model produced none")
         elif self.tool_call_missing_behavior == "error_stop":
-            request_info.error = "Expected tool call but model produced none"
+            raise ValueError("Expected tool call but model produced none")
 
     def _resolve_validate_kwargs(
         self, validate_backend: bool | str | dict[str, Any]

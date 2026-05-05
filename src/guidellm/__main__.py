@@ -452,24 +452,6 @@ def run(**kwargs):  # noqa: C901
     for alias in ("target", "model", "request_format"):
         with contextlib.suppress(KeyError):
             backend_kwargs[alias] = kwargs.pop(alias)
-
-    # Wire tool calling options.
-    # --tool-choice goes into extras.body as the API parameter; it overrides
-    # the per-request default set by the request handler when tools come from
-    # the dataset's tools_column.
-    # --tool-call-missing-behavior is a backend-level setting consumed by
-    # the worker.
-    tool_choice = kwargs.pop("tool_choice", None)
-    tool_call_missing_behavior = kwargs.pop("tool_call_missing_behavior", None)
-
-    if tool_choice is not None:
-        extras = backend_kwargs.setdefault("extras", {})
-        body = extras.setdefault("body", {})
-        body["tool_choice"] = tool_choice
-
-    if tool_call_missing_behavior is not None:
-        backend_kwargs["tool_call_missing_behavior"] = tool_call_missing_behavior
-
     kwargs["backend_kwargs"] = backend_kwargs
 
     # Handle console options
