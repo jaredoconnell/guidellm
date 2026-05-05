@@ -408,29 +408,6 @@ def benchmark():
     flag_value='{"enabled": true}',
     help="Enable over-saturation detection with default settings.",
 )
-# Tool calling configuration
-@click.option(
-    "--tool-choice",
-    type=str,
-    default=None,
-    help=(
-        'Tool choice mode: "required", "auto", or "none". '
-        "Controls whether the model is forced to produce tool calls on "
-        "tool-call turns. Overrides the per-request default (required) set "
-        "when tools come from the dataset."
-    ),
-)
-@click.option(
-    "--tool-call-missing-behavior",
-    type=click.Choice(["ignore_continue", "ignore_stop", "error_stop"]),
-    default=None,
-    help=(
-        "What the worker does when a tool call is expected but the model "
-        "does not produce one. ignore_continue: continue to next turn, "
-        "ignore_stop: cancel remaining turns, error_stop: error and "
-        "cancel remaining turns. Default: error_stop."
-    ),
-)
 def run(**kwargs):  # noqa: C901
     ctx = click.get_current_context()
     # Only set CLI args that differ from click defaults

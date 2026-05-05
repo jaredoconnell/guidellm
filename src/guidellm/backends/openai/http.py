@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import Field, field_validator
@@ -82,7 +82,9 @@ class OpenAIHttpBackendArgs(BackendArgs):
             "multi-turn requests. Only supported with /v1/responses."
         ),
     )
-    tool_call_missing_behavior: Literal["ignore_continue", "ignore_stop", "error_stop"] = Field(
+    tool_call_missing_behavior: Literal[
+        "ignore_continue", "ignore_stop", "error_stop"
+    ] = Field(
         default="error_stop",
         description=(
             "What happens when a tool call is expected but the model does not "
@@ -448,8 +450,8 @@ class OpenAIHTTPBackend(Backend):
             gen_response = request_handler.compile_non_streaming(
                 request, arguments, data
             )
-            self._check_tool_call_expectations(request, gen_response, request_info)
             yield gen_response, request_info
+            self._check_tool_call_expectations(request, gen_response)
             return
 
         try:
@@ -496,8 +498,8 @@ class OpenAIHTTPBackend(Backend):
 
             request_info.timings.request_end = time.time()
             gen_response = request_handler.compile_streaming(request, arguments)
-            self._check_tool_call_expectations(request, gen_response, request_info)
             yield gen_response, request_info
+            self._check_tool_call_expectations(request, gen_response)
         except asyncio.CancelledError as err:
             # Yield current result to store iterative results before propagating
             yield request_handler.compile_streaming(request, arguments), request_info
@@ -543,23 +545,22 @@ class OpenAIHTTPBackend(Backend):
         self,
         request: GenerationRequest,
         response: GenerationResponse,
-        request_info: RequestInfo,
     ) -> None:
         """Validate that a tool-call turn actually produced tool calls.
 
-        Called before the final yield in `resolve`. When the request
-        expected a tool call but the model didn't produce one, this mutates
-        *request_info* according to `tool_call_missing_behavior`:
+        Called after the final yield in ``resolve`` so the response is
+        delivered to the worker before any exception propagates.  When the
+        request expected a tool call but the model didn't produce one,
+        raises an exception according to ``tool_call_missing_behavior``:
 
         * ``ignore_continue`` -- no-op; the conversation proceeds normally.
-        * ``ignore_stop`` -- sets ``request_info.stop_conversation`` so the
-          worker cancels remaining turns (current turn stays completed).
-        * ``error_stop`` -- sets ``request_info.error`` so the worker marks
+        * ``ignore_stop`` -- raises :class:`asyncio.CancelledError` so the
+          worker cancels remaining turns.
+        * ``error_stop`` -- raises :class:`ValueError` so the worker marks
           the current turn as errored and cancels remaining turns.
 
         :param request: The generation request that was resolved.
         :param response: The compiled response from the model.
-        :param request_info: Mutable request metadata; fields may be set.
         """
         if not request.expects_tool_call or response.tool_calls:
             return
