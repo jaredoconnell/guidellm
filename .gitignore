@@ -1,3 +1,5 @@
+## Python
+
 # build version files
 src/guidellm/version.txt
 src/guidellm/version.py
@@ -183,6 +185,20 @@ cython_debug/
 # But not scenarios
 !src/guidellm/benchmark/scenarios/*.json
 !src/guidellm/benchmark/scenarios/*.yaml
+
+## AI
+# Ignore any AI memory files except for AGENTS.md
+
+# Claude code
+CLAUDE.*
+.claude/
+
+# Cursor
+.cursor/
+.cursorrules/
+
+# Gemini CLI
+.gemini/
 
 # UI Section - Next.js/React application under src/ui/
 # dependencies

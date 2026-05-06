@@ -117,8 +117,9 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
 
         with output_path.open("w", newline="") as file:
             writer = csv.writer(file)
-            headers: list[list[str]] = []
-            rows: list[list[str | int | float]] = []
+
+            all_headers: list[list[list[str]]] = []
+            all_values: list[list[str | int | float]] = []
 
             for benchmark in report.benchmarks:
                 benchmark_headers: list[list[str]] = []
@@ -144,15 +145,54 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
                 self._add_scheduler_info(benchmark, benchmark_headers, benchmark_values)
                 self._add_runtime_info(report, benchmark_headers, benchmark_values)
 
-                if not headers:
-                    headers = benchmark_headers
-                rows.append(benchmark_values)
+                all_headers.append(benchmark_headers)
+                all_values.append(benchmark_values)
+
+            headers, data_rows = self._align_columns(all_headers, all_values)
 
             self._write_multirow_header(writer, headers)
-            for row in rows:
+            for row in data_rows:
                 writer.writerow(row)
 
         return output_path
+
+    @staticmethod
+    def _align_columns(
+        all_headers: list[list[list[str]]],
+        all_values: list[list[str | int | float]],
+    ) -> tuple[list[list[str]], list[list[str | int | float]]]:
+        """
+        Align columns across multiple benchmarks that may have different column sets.
+
+        Builds a unified header list from all benchmarks (preserving first-seen order)
+        and pads each row with empty strings for columns it doesn't have.
+
+        :param all_headers: Per-benchmark list of column header hierarchies
+        :param all_values: Per-benchmark list of column values
+        :return: Tuple of (unified headers, aligned data rows)
+        """
+        ordered_headers: dict[tuple[str, ...], None] = {}
+        row_maps: list[dict[tuple[str, ...], str | int | float]] = []
+
+        for benchmark_headers, benchmark_values in zip(
+            all_headers, all_values, strict=True
+        ):
+            row_map: dict[tuple[str, ...], str | int | float] = {}
+            for header_parts, value in zip(
+                benchmark_headers, benchmark_values, strict=False
+            ):
+                header_key = tuple(header_parts)
+                row_map[header_key] = value
+                if header_key not in ordered_headers:
+                    ordered_headers[header_key] = None
+            row_maps.append(row_map)
+
+        header_keys = list(ordered_headers.keys())
+        headers = [list(k) for k in header_keys]
+        data_rows: list[list[str | int | float]] = [
+            [row_map.get(k, "") for k in header_keys] for row_map in row_maps
+        ]
+        return headers, data_rows
 
     def _write_multirow_header(self, writer: Any, headers: list[list[str]]) -> None:
         """

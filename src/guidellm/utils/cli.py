@@ -3,6 +3,9 @@ import json
 from typing import Any
 
 import click
+import yaml
+
+from guidellm.utils import arg_string
 
 __all__ = [
     "Union",
@@ -108,6 +111,43 @@ def parse_json_list(ctx, param, value):
         return None
 
     return [parse_json(ctx, param, item) for item in list_value]
+
+
+def parse_arguments(
+    ctx: click.Context, param: click.Parameter, value: list[str] | tuple[str, ...] | str
+) -> Any:
+    """
+    Parse a string value into a Python object using YAML, JSON, or key=value pairs.
+
+    This functions uses a combination of YAML and arg_string parsers to handle any input
+    format since PyYAML will parse JSON and raw types.
+
+    :param ctx: Click context
+    :param param: Click parameter
+    :param value: The input value to parse, string or list/tuple of strings
+    """
+    if isinstance(value, list | tuple):
+        return [parse_arguments(ctx, param, val) for val in value]
+    if isinstance(value, str):
+        yaml_parsed = False
+        try:
+            value_parsed = yaml.safe_load(value)
+            yaml_parsed = True
+        except yaml.YAMLError:
+            value_parsed = value
+        # If no change from YAML parsing, try arg_string parsing
+        if value_parsed == value:
+            try:
+                value_parsed = arg_string.loads(value)
+            # If arg_string parsing fails, attempt to parse the original string
+            except arg_string.ArgStringParseError as e:
+                if not yaml_parsed:
+                    raise click.BadParameter(
+                        f"{param.name} must be a valid YAML, JSON, or key=value string."
+                    ) from e
+        return value_parsed
+
+    return value
 
 
 def set_if_not_default(ctx: click.Context, **kwargs) -> dict[str, Any]:
