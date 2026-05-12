@@ -499,8 +499,8 @@ class OpenAIHTTPBackend(Backend):
 
             request_info.timings.request_end = time.time()
             gen_response = request_handler.compile_streaming(request, arguments)
-            yield gen_response, request_info
             self._check_tool_call_expectations(request, gen_response)
+            yield gen_response, request_info
         except asyncio.CancelledError as err:
             # Yield current result to store iterative results before propagating
             yield request_handler.compile_streaming(request, arguments), request_info
@@ -549,9 +549,10 @@ class OpenAIHTTPBackend(Backend):
     ) -> None:
         """Validate that a tool-call turn actually produced tool calls.
 
-        Called after the final yield in ``resolve`` so the response is
-        delivered to the worker before any exception propagates.  When the
-        request expected a tool call but the model didn't produce one,
+        Called before the final yield in ``resolve`` so that any raised
+        exception prevents the normal yield and is instead handled by the
+        ``except`` block (which yields the response once before propagating).
+        When the request expected a tool call but the model didn't produce one,
         raises an exception according to ``tool_call_missing_behavior``:
 
         * ``ignore_continue`` -- no-op; the conversation proceeds normally.
