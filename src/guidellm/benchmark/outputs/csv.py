@@ -135,6 +135,9 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
                 self._add_server_throughput_metrics(
                     benchmark, benchmark_headers, benchmark_values
                 )
+                self._add_reasoning_token_metrics(
+                    benchmark, benchmark_headers, benchmark_values
+                )
                 for modality_name in ["text", "image", "video", "audio"]:
                     self._add_modality_metrics(
                         benchmark,
@@ -513,6 +516,55 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
             benchmark.metrics.iter_tokens_per_iteration,
             "Token Streaming",
             "Iter Tokens/Iter",
+        )
+
+    def _add_reasoning_token_metrics(
+        self,
+        benchmark: GenerativeBenchmark,
+        headers: list[list[str]],
+        values: list[str | int | float],
+    ) -> None:
+        """
+        Add reasoning and content output token metrics to CSV.
+
+        :param benchmark: Benchmark data to extract reasoning metrics from
+        :param headers: List of header hierarchies to append to
+        :param values: List of values to append to
+        """
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.reasoning_token_count,
+            "Reasoning Token Metrics",
+            "Reasoning Tokens",
+        )
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.reasoning_tokens_per_second,
+            "Reasoning Token Metrics",
+            "Reasoning Tokens/Sec",
+        )
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.content_output_token_count,
+            "Content Output Token Metrics",
+            "Content Output Tokens",
+        )
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.content_output_tokens_per_second,
+            "Content Output Token Metrics",
+            "Content Output Tokens/Sec",
+        )
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.time_to_first_output_token_ms,
+            "Content Output Token Metrics",
+            "Time to First Output Token ms",
         )
 
     def _add_modality_metrics(

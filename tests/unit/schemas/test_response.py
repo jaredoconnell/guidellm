@@ -363,6 +363,33 @@ class TestGenerationResponse:
             response.compile_stats(request, request_info)
 
     @pytest.mark.sanity
+    def test_reasoning_text_field(self):
+        """
+        reasoning_text stores the reasoning/thinking text when provided.
+
+        ## WRITTEN BY AI ##
+        """
+        response = GenerationResponse(
+            request_id="reason-txt-1",
+            request_args="test_args",
+            reasoning_text="Let me think...",
+        )
+        assert response.reasoning_text == "Let me think..."
+
+    @pytest.mark.sanity
+    def test_reasoning_text_defaults_to_none(self):
+        """
+        reasoning_text defaults to None when not provided.
+
+        ## WRITTEN BY AI ##
+        """
+        response = GenerationResponse(
+            request_id="reason-txt-2",
+            request_args="test_args",
+        )
+        assert response.reasoning_text is None
+
+    @pytest.mark.sanity
     def test_marshalling(
         self, valid_instances: tuple[GenerationResponse, dict[str, str]]
     ):

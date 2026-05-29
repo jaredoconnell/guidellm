@@ -1029,6 +1029,195 @@ class TestChatCompletionsRequestHandler:
         assert "Let me think..." not in response.text
         assert response.text == "Answer: 42"
 
+    @pytest.mark.sanity
+    def test_streaming_reasoning_text_accumulated(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify that reasoning text from delta.reasoning is accumulated into
+        response.reasoning_text when compile_streaming is called.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        lines = [
+            (
+                'data: {"id": "chatcmpl-r1", "choices": '
+                '[{"index": 0, "delta": {"reasoning": "Let me"}}], "usage": {}}'
+            ),
+            'data: {"choices": [{"delta": {"reasoning": " think about"}}], "usage": {}}',
+            'data: {"choices": [{"delta": {"reasoning": " this."}}], "usage": {}}',
+            'data: {"choices": [{"delta": {"content": "The answer is 42."}}], "usage": {}}',
+            "data: [DONE]",
+        ]
+
+        for line in lines:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+
+        response = instance.compile_streaming(generation_request, arguments)
+        assert response.reasoning_text == "Let me think about this."
+        assert response.text == "The answer is 42."
+
+    @pytest.mark.sanity
+    def test_streaming_last_iteration_had_content_reasoning_only(
+        self, valid_instances
+    ):
+        """
+        Verify that last_iteration_had_content returns False when only
+        delta.reasoning is received (no delta.content).
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        line = (
+            'data: {"choices": [{"delta": {"reasoning": "Thinking..."}}], '
+            '"usage": {}}'
+        )
+        instance.add_streaming_line(line)
+
+        assert instance.last_iteration_had_content is False
+
+    @pytest.mark.sanity
+    def test_streaming_last_iteration_had_content_with_content(
+        self, valid_instances
+    ):
+        """
+        Verify that last_iteration_had_content returns True when
+        delta.content is received.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        line = (
+            'data: {"choices": [{"delta": {"content": "Hello"}}], '
+            '"usage": {}}'
+        )
+        instance.add_streaming_line(line)
+
+        assert instance.last_iteration_had_content is True
+
+    @pytest.mark.sanity
+    def test_streaming_last_iteration_had_content_mixed_chunk(
+        self, valid_instances
+    ):
+        """
+        Verify that last_iteration_had_content is True when a chunk has both
+        delta.reasoning and delta.content.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        line = (
+            'data: {"choices": [{"delta": '
+            '{"reasoning": "Hmm...", "content": "Yes"}}], "usage": {}}'
+        )
+        instance.add_streaming_line(line)
+
+        assert instance.last_iteration_had_content is True
+
+    @pytest.mark.sanity
+    def test_extract_metrics_reasoning_tokens(self, valid_instances):
+        """
+        Verify that extract_metrics parses completion_tokens_details.reasoning_tokens
+        and sets it on the output UsageMetrics.reasoning_tokens.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        usage = {
+            "prompt_tokens": 20,
+            "completion_tokens": 50,
+            "completion_tokens_details": {
+                "reasoning_tokens": 30,
+            },
+        }
+
+        input_metrics, output_metrics = instance.extract_metrics(usage, "some text")
+
+        assert output_metrics.reasoning_tokens == 30
+        assert output_metrics.text_tokens == 50
+        assert input_metrics.text_tokens == 20
+
+    @pytest.mark.sanity
+    def test_format_history_excludes_reasoning_by_default(
+        self, valid_instances
+    ):
+        """
+        Test that when include_reasoning_in_history is not set, reasoning text
+        from a prior response is NOT included in the assistant message in
+        multi-turn history.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me calculate... 2+2 equals 4.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+
+        result = instance.format(
+            data, history=[(prev_request, prev_response)]
+        )
+
+        messages = result.body["messages"]
+        assistant_msg = next(m for m in messages if m["role"] == "assistant")
+        assert assistant_msg["content"] == "4"
+        assert "Let me calculate" not in assistant_msg["content"]
+
+    @pytest.mark.sanity
+    def test_format_history_includes_reasoning_when_enabled(
+        self, valid_instances
+    ):
+        """
+        Test that when include_reasoning_in_history=True, reasoning text from a
+        prior response IS prepended to the assistant content in multi-turn
+        history.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me calculate... ",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            include_reasoning_in_history=True,
+        )
+
+        messages = result.body["messages"]
+        assistant_msg = next(m for m in messages if m["role"] == "assistant")
+        assert assistant_msg["content"] == "Let me calculate... 4"
+
     # Tool call response handling tests
 
     @pytest.mark.sanity
@@ -3367,6 +3556,165 @@ class TestResponsesRequestHandler:
         assert len(fco_items) == 1
         assert fco_items[0]["call_id"] == "call_abc"
         assert fco_items[0]["output"] == '{"status": "ok"}'
+
+    @pytest.mark.sanity
+    def test_streaming_reasoning_summary_text(
+        self, valid_instances, generation_request
+    ):
+        """
+        Test streaming handles response.reasoning_summary_text.delta events
+        correctly: triggers TTFT, sets last_iteration_had_content=False for
+        reasoning, True for content, and compile_streaming separates reasoning
+        from output text.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        # First reasoning event should return 1 (triggers TTFT)
+        result = instance.add_streaming_line(
+            "event: response.reasoning_summary_text.delta"
+        )
+        assert result == 0  # event: lines are skipped
+        result = instance.add_streaming_line(
+            'data: {"type":"response.reasoning_summary_text.delta",'
+            '"delta":"Let me think",'
+            '"sequence_number":2}'
+        )
+        assert result == 1
+        assert instance.last_iteration_had_content is False
+
+        # Second reasoning event
+        result = instance.add_streaming_line(
+            'data: {"type":"response.reasoning_summary_text.delta",'
+            '"delta":" about this.",'
+            '"sequence_number":3}'
+        )
+        assert result == 1
+        assert instance.last_iteration_had_content is False
+
+        # Content text event returns 1 and sets last_iteration_had_content=True
+        result = instance.add_streaming_line(
+            "event: response.output_text.delta"
+        )
+        result = instance.add_streaming_line(
+            'data: {"type":"response.output_text.delta",'
+            '"delta":"The answer is 4.",'
+            '"sequence_number":5}'
+        )
+        assert result == 1
+        assert instance.last_iteration_had_content is True
+
+        # Terminal event
+        instance.add_streaming_line(
+            'data: {"type":"response.completed",'
+            '"response":{"id":"resp_r1",'
+            '"usage":{"input_tokens":10,"output_tokens":20}},'
+            '"sequence_number":8}'
+        )
+
+        response = instance.compile_streaming(generation_request, arguments)
+        assert response.text == "The answer is 4."
+        assert response.reasoning_text == "Let me think about this."
+        assert response.input_metrics.text_tokens == 10
+        assert response.output_metrics.text_tokens == 20
+
+    @pytest.mark.sanity
+    def test_extract_metrics_reasoning_tokens_responses_api(self, valid_instances):
+        """
+        Test extract_metrics parses reasoning_tokens from output_tokens_details
+        in the Responses API usage format.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        usage = {
+            "input_tokens": 50,
+            "output_tokens": 100,
+            "output_tokens_details": {
+                "text_tokens": 80,
+                "reasoning_tokens": 20,
+            },
+        }
+
+        input_metrics, output_metrics = instance.extract_metrics(usage, "hello world")
+
+        assert output_metrics.reasoning_tokens == 20
+        assert output_metrics.text_tokens == 80
+        assert input_metrics.text_tokens == 50
+
+    @pytest.mark.sanity
+    def test_format_history_excludes_reasoning_by_default_responses(
+        self, valid_instances
+    ):
+        """
+        Test that format excludes reasoning_text from assistant history content
+        when include_reasoning_in_history is False (default).
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Explain quantum computing"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="Quantum computing uses qubits.",
+            reasoning_text="I should explain this simply. ",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["Tell me more"]},
+        )
+
+        result = instance.format(data, history=[(prev_request, prev_response)])
+
+        input_items = result.body["input"]
+        assistant_items = [i for i in input_items if i.get("role") == "assistant"]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == "Quantum computing uses qubits."
+
+    @pytest.mark.sanity
+    def test_format_history_includes_reasoning_when_enabled_responses(
+        self, valid_instances
+    ):
+        """
+        Test that format prepends reasoning_text to assistant content in history
+        when include_reasoning_in_history=True.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Explain quantum computing"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="Quantum computing uses qubits.",
+            reasoning_text="I should explain this simply. ",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["Tell me more"]},
+        )
+
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            include_reasoning_in_history=True,
+        )
+
+        input_items = result.body["input"]
+        assistant_items = [i for i in input_items if i.get("role") == "assistant"]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == (
+            "I should explain this simply. Quantum computing uses qubits."
+        )
 
 
 class TestEnsureChatCompletionsTool:

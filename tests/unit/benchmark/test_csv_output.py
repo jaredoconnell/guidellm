@@ -244,6 +244,7 @@ async def test_finalize_aligns_columns_in_written_csv(tmp_path: Path):
         "_add_request_counts",
         "_add_request_latency_metrics",
         "_add_server_throughput_metrics",
+        "_add_reasoning_token_metrics",
         "_add_modality_metrics",
         "_add_scheduler_info",
         "_add_runtime_info",

@@ -222,6 +222,47 @@ class GenerativeRequestStats(StandardBaseDict):
 
         return self.output_tokens / latency
 
+    # Reasoning and content output token breakdowns
+    @computed_field  # type: ignore[misc]
+    @property
+    def reasoning_tokens(self) -> int | None:
+        """
+        :return: Number of reasoning/thinking tokens in the output, or None if
+            not reported
+        """
+        return self.output_metrics.reasoning_tokens
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def content_output_tokens(self) -> int | None:
+        """
+        Content-only output tokens (output_tokens minus reasoning_tokens).
+
+        :return: Number of content output tokens, or None if output_tokens is
+            unavailable
+        """
+        output = self.output_tokens
+        if output is None:
+            return None
+        return output - (self.reasoning_tokens or 0)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def time_to_first_output_token_ms(self) -> float | None:
+        """
+        Time to first content (non-reasoning) token in milliseconds.
+
+        When no reasoning tokens are emitted this equals TTFT.
+
+        :return: Milliseconds from request start to first content token,
+            or None if unavailable
+        """
+        first_output = self.info.timings.first_output_token_iteration
+        start = self.info.timings.request_start
+        if first_output is None or start is None:
+            return None
+        return 1000 * (first_output - start)
+
     @computed_field  # type: ignore[misc]
     @property
     def iter_tokens_per_iteration(self) -> float | None:
@@ -348,3 +389,66 @@ class GenerativeRequestStats(StandardBaseDict):
         output_timings = self.output_tokens_timings
 
         return ([prompt_timings] if prompt_timings else []) + output_timings
+
+    @property
+    def reasoning_tokens_timing(self) -> tuple[float, float]:
+        """
+        Single-point timing for reasoning tokens, analogous to prompt_tokens_timing.
+
+        :return: Tuple of (timestamp, reasoning_token_count)
+        """
+        # Reasoning tokens complete at the first content token (or request end).
+        # Falls back through: first_output_token -> first_token -> request_end.
+        first_output = self.info.timings.first_output_token_iteration
+        return (
+            (
+                first_output
+                if first_output is not None
+                else (
+                    self.first_token_iteration
+                    if self.first_token_iteration is not None
+                    else self.request_end_time
+                )
+            ),
+            self.reasoning_tokens or 0.0,
+        )
+
+    @property
+    def content_output_tokens_timings(self) -> list[tuple[float, float]]:
+        """
+        Timing tuples for content-only output tokens, using
+        first_output_token_iteration as the start point.
+
+        :return: List of (timestamp, token_count) tuples for content output
+        """
+        content_tokens = self.content_output_tokens
+        first_output = self.info.timings.first_output_token_iteration
+        last_token = self.last_token_iteration
+
+        # Not enough data to interpolate -- collapse to a single point
+        if (
+            first_output is None
+            or last_token is None
+            or content_tokens is None
+            or content_tokens <= 0
+        ):
+            return [
+                (
+                    (
+                        last_token
+                        if last_token is not None
+                        else self.request_end_time
+                    ),
+                    content_tokens or 0.0,
+                )
+            ]
+
+        # Single iteration: all content tokens arrived at once
+        if self.token_iterations <= 1:
+            return [(first_output, float(content_tokens))]
+
+        # Interpolate between first_output_token and last_token
+        remaining_iters = max(self.token_iterations - 1, 1)
+        tok_per_iter = content_tokens / remaining_iters
+        iter_times = np.linspace(first_output, last_token, num=remaining_iters + 1)
+        return [(t, tok_per_iter) for t in iter_times]

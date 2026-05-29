@@ -491,9 +491,21 @@ class GenerativeMetricsAccumulator(StandardBaseModel):
         default_factory=RunningMetricStats,
         description="Accumulated total token count statistics",
     )
+    reasoning_tokens: RunningMetricStats = Field(
+        default_factory=RunningMetricStats,
+        description="Accumulated reasoning token count statistics",
+    )
+    content_output_tokens: RunningMetricStats = Field(
+        default_factory=RunningMetricStats,
+        description="Accumulated content-only output token count statistics",
+    )
     time_to_first_token_ms: RunningMetricStats = Field(
         default_factory=RunningMetricStats,
         description="Accumulated time to first token statistics in milliseconds",
+    )
+    time_to_first_output_token_ms: RunningMetricStats = Field(
+        default_factory=RunningMetricStats,
+        description="Accumulated time to first content token stats in ms",
     )
     time_per_output_token_ms: RunningMetricStats = Field(
         default_factory=RunningMetricStats,
@@ -531,9 +543,18 @@ class GenerativeMetricsAccumulator(StandardBaseModel):
         self.prompt_tokens.update_estimate(stats.prompt_tokens, duration=duration)
         self.output_tokens.update_estimate(stats.output_tokens, duration=duration)
         self.total_tokens.update_estimate(stats.total_tokens, duration=duration)
+        self.reasoning_tokens.update_estimate(
+            stats.reasoning_tokens, duration=duration
+        )
+        self.content_output_tokens.update_estimate(
+            stats.content_output_tokens, duration=duration
+        )
         self.request_latency.update_estimate(stats.request_latency, duration=duration)
         self.time_to_first_token_ms.update_estimate(
             stats.time_to_first_token_ms, duration=duration
+        )
+        self.time_to_first_output_token_ms.update_estimate(
+            stats.time_to_first_output_token_ms, duration=duration
         )
         self.time_per_output_token_ms.update_estimate(
             stats.time_per_output_token_ms,

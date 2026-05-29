@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from guidellm.schemas import (
     GenerativeRequestStats,
     RequestInfo,
+    RequestTimings,
     StandardBaseDict,
     UsageMetrics,
 )
@@ -661,3 +662,115 @@ class TestGenerativeRequestStats:
             assert got is None
         else:
             assert pytest.approx(exp, rel=1e-6, abs=1e-6) == got
+
+    @pytest.mark.sanity
+    def test_reasoning_tokens_property(self):
+        """
+        reasoning_tokens returns output_metrics.reasoning_tokens when set.
+
+        ## WRITTEN BY AI ##
+        """
+        info = RequestInfo(request_id="reason-1", status="completed")
+        info.timings.resolve_end = 1.0
+        stats = GenerativeRequestStats(
+            request_id="reason-1",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100, reasoning_tokens=30),
+        )
+        assert stats.reasoning_tokens == 30
+
+    @pytest.mark.sanity
+    def test_reasoning_tokens_none_when_not_reported(self):
+        """
+        reasoning_tokens is None when output_metrics has no reasoning_tokens.
+
+        ## WRITTEN BY AI ##
+        """
+        info = RequestInfo(request_id="reason-2", status="completed")
+        info.timings.resolve_end = 1.0
+        stats = GenerativeRequestStats(
+            request_id="reason-2",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        assert stats.reasoning_tokens is None
+
+    @pytest.mark.sanity
+    def test_content_output_tokens(self):
+        """
+        content_output_tokens equals output_tokens minus reasoning_tokens.
+
+        ## WRITTEN BY AI ##
+        """
+        info = RequestInfo(request_id="content-1", status="completed")
+        info.timings.resolve_end = 1.0
+        stats = GenerativeRequestStats(
+            request_id="content-1",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100, reasoning_tokens=30),
+        )
+        assert stats.content_output_tokens == 70
+
+    @pytest.mark.sanity
+    def test_content_output_tokens_equals_output_when_no_reasoning(self):
+        """
+        content_output_tokens equals output_tokens when reasoning_tokens is None.
+
+        ## WRITTEN BY AI ##
+        """
+        info = RequestInfo(request_id="content-2", status="completed")
+        info.timings.resolve_end = 1.0
+        stats = GenerativeRequestStats(
+            request_id="content-2",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        assert stats.content_output_tokens == 100
+        assert stats.content_output_tokens == stats.output_tokens
+
+    @pytest.mark.sanity
+    def test_time_to_first_output_token_ms(self):
+        """
+        time_to_first_output_token_ms computes ms from request_start to
+        first_output_token_iteration.
+
+        ## WRITTEN BY AI ##
+        """
+        timings = RequestTimings(
+            request_start=10.0,
+            first_output_token_iteration=10.5,
+            resolve_end=11.0,
+        )
+        info = RequestInfo(
+            request_id="ttfot-1", status="completed", timings=timings
+        )
+        stats = GenerativeRequestStats(
+            request_id="ttfot-1",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        assert stats.time_to_first_output_token_ms == pytest.approx(500.0)
+
+    @pytest.mark.sanity
+    def test_time_to_first_output_token_ms_none_without_timing(self):
+        """
+        time_to_first_output_token_ms is None when first_output_token_iteration
+        is not set.
+
+        ## WRITTEN BY AI ##
+        """
+        info = RequestInfo(request_id="ttfot-2", status="completed")
+        info.timings.resolve_end = 1.0
+        info.timings.request_start = 0.0
+        stats = GenerativeRequestStats(
+            request_id="ttfot-2",
+            info=info,
+            input_metrics=UsageMetrics(text_tokens=50),
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        assert stats.time_to_first_output_token_ms is None

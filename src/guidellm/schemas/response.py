@@ -57,6 +57,10 @@ class GenerationResponse(StandardBaseModel):
         default=None,
         description="The generated response text.",
     )
+    reasoning_text: str | None = Field(
+        default=None,
+        description="Accumulated reasoning/thinking text from streaming responses.",
+    )
     tool_calls: list[ToolCall] | None = Field(
         default=None,
         description=(

@@ -89,6 +89,18 @@ class OpenAIRequestHandler(Protocol):
         """
         ...
 
+    @property
+    def last_iteration_had_content(self) -> bool:
+        """
+        Whether the last streaming iteration produced content (not reasoning-only).
+
+        Used by the HTTP streaming loop to distinguish the first content token
+        from the first reasoning token for TTFOT measurement.
+
+        :return: True if the last iteration had content, False if reasoning-only
+        """
+        ...
+
     def compile_streaming(
         self, request: GenerationRequest, arguments: GenerationRequestArguments
     ) -> GenerationResponse:
@@ -173,6 +185,7 @@ def _compile_streaming_response(
         [dict[str, int | dict[str, int]] | None, str | None],
         tuple[UsageMetrics, UsageMetrics],
     ],
+    streaming_reasoning_texts: list[str] | None = None,
 ) -> GenerationResponse:
     """Compile accumulated streaming state into a final response.
 
@@ -187,9 +200,16 @@ def _compile_streaming_response(
     :param streaming_usage: Usage dict from the final streaming event.
     :param streaming_response_id: Server-assigned response ID, if any.
     :param extract_metrics: Handler-specific metric extraction callable.
+    :param streaming_reasoning_texts: Reasoning text chunks accumulated during
+        streaming.
     :return: Standardized GenerationResponse with extracted metrics.
     """
     text = "".join(streaming_texts) or None
+    reasoning_text = (
+        "".join(streaming_reasoning_texts) or None
+        if streaming_reasoning_texts
+        else None
+    )
     tool_calls: list[ToolCall] | None = (
         [streaming_tool_calls[i] for i in sorted(streaming_tool_calls)]
         if streaming_tool_calls
@@ -205,6 +225,7 @@ def _compile_streaming_response(
         request_args=arguments.model_dump_json(),
         response_id=streaming_response_id,
         text=text,
+        reasoning_text=reasoning_text,
         tool_calls=tool_calls,
         input_metrics=input_metrics,
         output_metrics=output_metrics,
@@ -239,6 +260,22 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
         self.streaming_texts: list[str] = []
         self.streaming_usage: dict[str, int | dict[str, int]] | None = None
         self.streaming_response_id: str | None = None
+
+    @property
+    def last_iteration_had_content(self) -> bool:
+        """
+        Whether the last streaming iteration produced content (not reasoning-only).
+
+        Text completions (``/v1/completions``) have no reasoning concept, so
+        every token is content. ChatCompletionsRequestHandler and
+        ResponsesRequestHandler override this with a tracked flag that starts
+        ``False`` and only becomes ``True`` when a content or tool call delta
+        arrives — correctly handling the case where a request is stopped
+        early with only reasoning tokens.
+
+        :return: Always True for the text completions base class
+        """
+        return True
 
     def format(  # noqa: C901
         self,
@@ -468,6 +505,7 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
             ),
             text_words=text_words,
             text_characters=text_chars,
+            reasoning_tokens=output_details.get("reasoning_tokens"),
             image_tokens=output_details.get("image_tokens"),
             video_tokens=output_details.get("video_tokens"),
             audio_tokens=output_details.get("audio_tokens"),
@@ -492,6 +530,16 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
         # keyed by the delta ``index`` field.  Needed for multi-turn tool
         # calling so the response carries the id/name/arguments of each call.
         self.streaming_tool_calls: dict[int, ToolCall] = {}
+        self.streaming_reasoning_texts: list[str] = []
+        self._last_iteration_had_content: bool = False
+
+    @property
+    def last_iteration_had_content(self) -> bool:
+        """
+        :return: True if the last streaming iteration produced content
+            (not reasoning-only)
+        """
+        return self._last_iteration_had_content
 
     @staticmethod
     def _ensure_tool_format(tool: dict[str, Any]) -> dict[str, Any]:
@@ -726,11 +774,22 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
         # For tool call responses, include the assistant's tool_calls and
         # synthetic tool result messages so the model sees the full
         # multi-turn exchange.  For plain text responses, just add content.
+        # Reasoning text is included only when explicitly enabled.
+        include_reasoning = kwargs.get("include_reasoning_in_history", False)
         if response and response.tool_calls:
+            # Tool call turn: replay the assistant's tool_calls plus tool results
+            assistant_content = response.text
+            # Prepend reasoning text when opted-in via config
+            if include_reasoning and response.reasoning_text:
+                assistant_content = (
+                    (response.reasoning_text + (response.text or ""))
+                    if response.reasoning_text
+                    else response.text
+                )
             arguments.body["messages"].append(
                 {
                     "role": "assistant",
-                    "content": response.text,
+                    "content": assistant_content,
                     "tool_calls": [tc.model_dump() for tc in response.tool_calls],
                 }
             )
@@ -740,9 +799,13 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
                     response.tool_calls, tool_response_columns
                 )
             )
-        elif response and response.text:
+        elif response and (response.text or response.reasoning_text):
+            # Plain text turn: include assistant content (and optionally reasoning)
+            assistant_content = response.text or ""
+            if include_reasoning and response.reasoning_text:
+                assistant_content = response.reasoning_text + assistant_content
             arguments.body["messages"].append(
-                {"role": "assistant", "content": response.text}
+                {"role": "assistant", "content": assistant_content}
             )
 
         # Inject tool definitions and apply tool-call-specific overrides.
@@ -811,15 +874,22 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
             self.streaming_response_id = data["id"]
 
         updated = False
+        # Tracks whether this iteration produced user-visible content (not
+        # reasoning-only). Used by the HTTP layer to set TTFOT timing.
+        had_content = False
         choices, usage = self.extract_choices_and_usage(data)
         choice: dict[str, dict] = choices[0] if choices else {}
         delta = choice.get("delta", {}) if choices else {}
 
-        if delta.get("reasoning"):
+        # Reasoning tokens still trigger TTFT (updated=True) but are not
+        # considered "content" for the TTFOT metric.
+        if reasoning := delta.get("reasoning"):
+            self.streaming_reasoning_texts.append(reasoning)
             updated = True
         if content := delta.get("content"):
             self.streaming_texts.append(content)
             updated = True
+            had_content = True
 
         # Accumulate streamed tool_calls deltas.  Each tool call may be split
         # across multiple chunks; we reassemble by ``index``.
@@ -828,10 +898,15 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
         for tc_delta in delta.get("tool_calls") or []:
             self._accumulate_tool_call_delta(tc_delta)
             updated = True
+            had_content = True
 
         if usage:
             self.streaming_usage = usage
 
+        # Only update the flag when we actually processed a token-bearing
+        # iteration; non-updating lines should not reset the flag.
+        if updated:
+            self._last_iteration_had_content = had_content
         return 1 if updated else 0
 
     def _accumulate_tool_call_delta(self, tc_delta: dict[str, Any]) -> None:
@@ -879,6 +954,7 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
             self.streaming_usage,
             self.streaming_response_id,
             self.extract_metrics,
+            streaming_reasoning_texts=self.streaming_reasoning_texts,
         )
 
 
@@ -1018,11 +1094,21 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
 
     def __init__(self):
         self.streaming_texts: list[str] = []
+        self.streaming_reasoning_texts: list[str] = []
         self.streaming_usage: dict[str, int | dict[str, int]] | None = None
         self.streaming_response_id: str | None = None
         # Accumulated function_call items keyed by output_index, used to
         # reconstruct tool_calls on GenerationResponse after streaming.
         self.streaming_tool_calls: dict[int, ToolCall] = {}
+        self._last_iteration_had_content: bool = False
+
+    @property
+    def last_iteration_had_content(self) -> bool:
+        """
+        :return: True if the last streaming iteration produced content
+            (not reasoning-only)
+        """
+        return self._last_iteration_had_content
 
     @staticmethod
     def _ensure_tool_format(tool: dict[str, Any]) -> dict[str, Any]:
@@ -1075,12 +1161,20 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
         data: GenerationRequest,
         response: GenerationResponse | None,
         prev_requests: list[GenerationRequestArguments],
+        *,
+        include_reasoning: bool = False,
     ) -> list[dict[str, Any]]:
         """Build the ``input`` array for the Responses API.
 
         The Responses API uses a flat ``input`` list of role-tagged message
         dicts (with nested content parts like ``input_text``, ``input_image``)
         instead of chat completions' ``messages`` array.
+
+        :param data: The current generation request.
+        :param response: Optional prior response for multi-turn context.
+        :param prev_requests: Previously formatted request arguments.
+        :param include_reasoning: Whether to include reasoning text in the
+            assistant's history content.
         """
         input_items: list[dict[str, Any]] = []
 
@@ -1123,8 +1217,12 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
                         "output": output_content,
                     }
                 )
-        elif response and response.text:
-            input_items.append({"role": "assistant", "content": response.text})
+        elif response and (response.text or response.reasoning_text):
+            # Plain text turn: include assistant content (and optionally reasoning)
+            assistant_content = response.text or ""
+            if include_reasoning and response.reasoning_text:
+                assistant_content = response.reasoning_text + assistant_content
+            input_items.append({"role": "assistant", "content": assistant_content})
 
         return input_items
 
@@ -1222,7 +1320,10 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
         if prefix:
             arguments.body["instructions"] = prefix
 
-        arguments.body["input"] = self._build_input_items(data, response, prev_requests)
+        include_reasoning = kwargs.get("include_reasoning_in_history", False)
+        arguments.body["input"] = self._build_input_items(
+            data, response, prev_requests, include_reasoning=include_reasoning
+        )
 
         # Server-side history: reference the previous response by ID and
         # include any tool outputs the server cannot know (tool execution
@@ -1282,6 +1383,7 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
             self.streaming_usage,
             self.streaming_response_id,
             self.extract_metrics,
+            streaming_reasoning_texts=self.streaming_reasoning_texts,
         )
 
     def extract_line_data(self, line: str) -> dict[str, Any] | None:
@@ -1461,6 +1563,34 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
         # Not a function-call event; let the caller handle it.
         return None
 
+    def _handle_streaming_text_delta(
+        self, event_type: str, data: dict[str, Any]
+    ) -> int | None:
+        """Process text and reasoning delta events.
+
+        :returns: Token count delta, or ``None`` if not a text/reasoning event.
+        """
+        # Reasoning summary events -- triggers TTFT (parity with Chat
+        # Completions) and accumulates reasoning text for optional multi-turn
+        # history inclusion.
+        if event_type == "response.reasoning_summary_text.delta":
+            delta = data.get("delta", "")
+            if delta:
+                self.streaming_reasoning_texts.append(delta)
+                self._last_iteration_had_content = False
+                return 1
+            return 0
+
+        if event_type == "response.output_text.delta":
+            delta = data.get("delta", "")
+            if delta:
+                self.streaming_texts.append(delta)
+                self._last_iteration_had_content = True
+                return 1
+            return 0
+
+        return None
+
     def add_streaming_line(self, line: str) -> int | None:
         if not (data := self.extract_line_data(line)):
             return None if data is None else 0
@@ -1474,15 +1604,15 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
             if isinstance(resp, dict) and "id" in resp:
                 self.streaming_response_id = resp["id"]
 
-        if event_type == "response.output_text.delta":
-            delta = data.get("delta", "")
-            if delta:
-                self.streaming_texts.append(delta)
-                return 1
-            return 0
+        # Handle reasoning and content text deltas (sets _last_iteration_had_content)
+        text_result = self._handle_streaming_text_delta(event_type, data)
+        if text_result is not None:
+            return text_result
 
+        # Function call deltas are always treated as content for TTFOT purposes
         fc_result = self._handle_streaming_function_call(event_type, data)
         if fc_result is not None:
+            self._last_iteration_had_content = True
             return fc_result
 
         if event_type in (
@@ -1490,11 +1620,6 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
             "response.failed",
             "response.incomplete",
         ):
-            # All three are terminal SSE events. response.completed is the
-            # normal case; response.failed and response.incomplete may be sent
-            # by some providers instead. Each carries a final response object
-            # with optional usage data. Returning None signals the streaming
-            # loop in http.py to break out of the stream.
             resp = data.get("response") or {}
             usage = resp.get("usage")
             if usage:
@@ -1553,6 +1678,7 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
             ),
             text_words=text_words,
             text_characters=text_chars,
+            reasoning_tokens=output_details.get("reasoning_tokens"),
             image_tokens=output_details.get("image_tokens"),
             video_tokens=output_details.get("video_tokens"),
             audio_tokens=output_details.get("audio_tokens"),

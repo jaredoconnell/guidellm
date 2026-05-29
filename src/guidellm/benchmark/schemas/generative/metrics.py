@@ -799,8 +799,20 @@ class GenerativeMetrics(StandardBaseDict):
     total_token_count: StatusDistributionSummary = Field(
         description="Distribution of total token counts by request status"
     )
+    reasoning_token_count: StatusDistributionSummary = Field(
+        description="Distribution of reasoning token counts by request status"
+    )
+    content_output_token_count: StatusDistributionSummary = Field(
+        description="Distribution of content output token counts by request status"
+    )
     time_to_first_token_ms: StatusDistributionSummary = Field(
         description="Distribution of first token latencies in milliseconds"
+    )
+    time_to_first_output_token_ms: StatusDistributionSummary = Field(
+        description=(
+            "Distribution of first content (non-reasoning) token latencies "
+            "in milliseconds"
+        )
     )
     time_per_output_token_ms: StatusDistributionSummary = Field(
         description="Distribution of average time per output token in milliseconds"
@@ -816,6 +828,12 @@ class GenerativeMetrics(StandardBaseDict):
     )
     tokens_per_second: StatusDistributionSummary = Field(
         description="Distribution of total token throughput including prompt and output"
+    )
+    reasoning_tokens_per_second: StatusDistributionSummary = Field(
+        description="Distribution of reasoning token generation rates"
+    )
+    content_output_tokens_per_second: StatusDistributionSummary = Field(
+        description="Distribution of content output token generation rates"
     )
     output_tokens_per_iteration: StatusDistributionSummary = Field(
         description="Distribution of output tokens generated per streaming iteration"
@@ -926,8 +944,26 @@ class GenerativeMetrics(StandardBaseDict):
                 incomplete=incomplete,
                 errored=errored,
             ),
+            reasoning_token_count=StatusDistributionSummary.from_values_function(
+                function=lambda req: req.reasoning_tokens or 0.0,
+                successful=successful,
+                incomplete=incomplete,
+                errored=errored,
+            ),
+            content_output_token_count=StatusDistributionSummary.from_values_function(
+                function=lambda req: req.content_output_tokens or 0.0,
+                successful=successful,
+                incomplete=incomplete,
+                errored=errored,
+            ),
             time_to_first_token_ms=StatusDistributionSummary.from_values_function(
                 function=lambda req: req.time_to_first_token_ms or 0.0,
+                successful=successful,
+                incomplete=incomplete,
+                errored=errored,
+            ),
+            time_to_first_output_token_ms=StatusDistributionSummary.from_values_function(
+                function=lambda req: req.time_to_first_output_token_ms or 0.0,
                 successful=successful,
                 incomplete=incomplete,
                 errored=errored,
@@ -964,6 +1000,18 @@ class GenerativeMetrics(StandardBaseDict):
             ),
             tokens_per_second=StatusDistributionSummary.rate_distribution_from_timings_function(
                 function=lambda req: req.total_tokens_timings,
+                successful=successful,
+                incomplete=incomplete,
+                errored=errored,
+            ),
+            reasoning_tokens_per_second=StatusDistributionSummary.rate_distribution_from_timings_function(
+                function=lambda req: req.reasoning_tokens_timing,
+                successful=successful,
+                incomplete=incomplete,
+                errored=errored,
+            ),
+            content_output_tokens_per_second=StatusDistributionSummary.rate_distribution_from_timings_function(
+                function=lambda req: req.content_output_tokens_timings,
                 successful=successful,
                 incomplete=incomplete,
                 errored=errored,

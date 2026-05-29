@@ -225,6 +225,8 @@ class GenerativeBenchmarkerConsole(GenerativeBenchmarkerOutput):
         self.print_video_table(report)
         self.print_audio_table(report)
         self.print_tool_call_table(report)
+        self.print_reasoning_token_table(report)
+        self.print_content_output_token_table(report)
         self.print_request_counts_table(report)
         self.print_request_latency_table(report)
         self.print_server_throughput_table(report)
@@ -375,6 +377,103 @@ class GenerativeBenchmarkerConsole(GenerativeBenchmarkerOutput):
                 ("mixed_tokens", "Mixed Tokens"),
                 ("count", "Count"),
             ],
+        )
+
+    def print_reasoning_token_table(self, report: GenerativeBenchmarksReport):
+        """
+        Print reasoning token statistics table if reasoning data exists.
+
+        :param report: The benchmark report containing reasoning token metrics
+        """
+        # Skip if no benchmark produced reasoning tokens
+        has_data = any(
+            benchmark.metrics.reasoning_token_count.successful is not None
+            and benchmark.metrics.reasoning_token_count.successful.total_sum > 0.0
+            for benchmark in report.benchmarks
+        )
+        if not has_data:
+            return
+
+        columns = ConsoleTableColumnsCollection()
+        for benchmark in report.benchmarks:
+            columns.add_value(
+                benchmark.config.strategy.type_,
+                group="Benchmark",
+                name="Strategy",
+                type_="text",
+            )
+            columns.add_stats(
+                benchmark.metrics.reasoning_token_count,
+                group="Reasoning Tok",
+                name="Per Req",
+            )
+            columns.add_stats(
+                benchmark.metrics.reasoning_tokens_per_second,
+                status="total",
+                group="Reasoning Tok",
+                name="Per Sec",
+                types=("mean",),
+            )
+
+        headers, values = columns.get_table_data()
+        self.console.print("\n")
+        self.console.print_table(
+            headers,
+            values,
+            title="Reasoning Token Statistics (Completed Requests)",
+        )
+
+    def print_content_output_token_table(self, report: GenerativeBenchmarksReport):
+        """
+        Print content output token statistics table if reasoning data exists.
+
+        Only printed when reasoning tokens are present (otherwise content
+        output tokens == output tokens and the table would be redundant).
+
+        :param report: The benchmark report containing content output token metrics
+        """
+        # Skip if no benchmark produced reasoning tokens -- content output
+        # table is redundant when it equals the existing output token table.
+        has_data = any(
+            benchmark.metrics.reasoning_token_count.successful is not None
+            and benchmark.metrics.reasoning_token_count.successful.total_sum > 0.0
+            for benchmark in report.benchmarks
+        )
+        if not has_data:
+            return
+
+        columns = ConsoleTableColumnsCollection()
+        for benchmark in report.benchmarks:
+            columns.add_value(
+                benchmark.config.strategy.type_,
+                group="Benchmark",
+                name="Strategy",
+                type_="text",
+            )
+            columns.add_stats(
+                benchmark.metrics.content_output_token_count,
+                group="Content Out Tok",
+                name="Per Req",
+            )
+            columns.add_stats(
+                benchmark.metrics.content_output_tokens_per_second,
+                status="total",
+                group="Content Out Tok",
+                name="Per Sec",
+                types=("mean",),
+            )
+            columns.add_stats(
+                benchmark.metrics.time_to_first_output_token_ms,
+                group="TTFOT",
+                name="ms",
+            )
+
+        headers, values = columns.get_table_data()
+        self.console.print("\n")
+        self.console.print_table(
+            headers,
+            values,
+            title="Content Output Token Statistics (Completed Requests)",
         )
 
     def print_request_counts_table(self, report: GenerativeBenchmarksReport):

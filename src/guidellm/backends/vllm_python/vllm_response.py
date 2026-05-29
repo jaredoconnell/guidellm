@@ -92,6 +92,7 @@ class VLLMResponseHandler:
             text_tokens=usage_metrics.get("completion_tokens", 0),
             text_words=text_words,
             text_characters=text_chars,
+            reasoning_tokens=output_details.get("reasoning_tokens"),
             image_tokens=output_details.get("image_tokens"),
             video_tokens=output_details.get("video_tokens"),
             audio_tokens=output_details.get("audio_tokens"),

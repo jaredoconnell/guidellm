@@ -151,6 +151,16 @@ class UsageMetrics(StandardBaseDict):
         default=None, description="Number of audio bytes processed/generated."
     )
 
+    # Reasoning stats (subset of text_tokens)
+    reasoning_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Number of reasoning/thinking tokens in the output. "
+            "Subset of text_tokens. Reported by the server via "
+            "completion_tokens_details or output_tokens_details."
+        ),
+    )
+
     # Tool call stats (subset of text_tokens)
     tool_call_tokens: int | None = Field(
         default=None,
