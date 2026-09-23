@@ -199,6 +199,9 @@ cython_debug/
 !tests/fixtures/tokenizers/**/*.json
 !tests/fixtures/tokenizers/**/*.yaml
 
+# Trace-replay profiling Job manifests
+!scripts/trace_profile/**/*.yaml
+
 ## AI
 # Ignore any AI memory files except for AGENTS.md and shared agent skills
 

@@ -1,0 +1,275 @@
+# GuideLLM trace-replay profiling Jobs (restricted-v2 / OpenShift).
+#
+# Prerequisites:
+#   oc create configmap guidellm-trace-profile \
+#     --from-file=sitecustomize.py=scripts/trace_profile/sitecustomize.py \
+#     --from-file=compare_replay_timings.py=scripts/trace_profile/compare_replay_timings.py
+#   Stage traces onto the PVC (see RUNBOOK.md).
+#
+# Edit REPLACE_* placeholders. Apply:
+#   oc apply -f scripts/trace_profile/guidellm-trace-profile-job.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: guidellm-trace-profile
+  labels:
+    app.kubernetes.io/name: guidellm
+    app.kubernetes.io/component: trace-profile
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guidellm-trace-profile-mock
+  labels:
+    app.kubernetes.io/name: guidellm
+    app.kubernetes.io/component: trace-profile-mock
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guidellm
+        app.kubernetes.io/component: trace-profile-mock
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mock-server
+          image: ghcr.io/vllm-project/guidellm:v0.7.3
+          imagePullPolicy: IfNotPresent
+          args:
+            - mock-server
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --ttft-ms
+            - "0"
+            - --itl-ms
+            - "0"
+            - --output-tokens
+            - "1"
+            - --request-latency
+            - "0"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/guidellm
+        - name: guidellm
+          image: ghcr.io/vllm-project/guidellm:v0.7.3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              export PATH="/opt/app-root/bin:$PATH"
+              python - <<'PY'
+              import time, urllib.request
+              for _ in range(120):
+                  try:
+                      urllib.request.urlopen("http://127.0.0.1:8000/v1/models", timeout=2)
+                      break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit("mock-server did not become ready")
+              PY
+              # Pass A: leave GUIDELLM_PROFILE unset.
+              # Pass B: export GUIDELLM_PROFILE=cprofile (or pyinstrument/line)
+              # and pip install --target "$HOME/.local" pyinstrument line_profiler
+              mkdir -p /results/pass-a-mock /results/profiles
+              guidellm run \
+                --backend kind=openai_http,target=http://127.0.0.1:8000 \
+                --profile kind=replay,time_scale=1.0 \
+                --data kind=otel,source.kind=json_file,source.path=/traces/otel.jsonl,time_scale=1.0 \
+                --disable-progress \
+                --output kind=json,path=/results/pass-a-mock/benchmarks.json
+              python /hooks/compare_replay_timings.py \
+                --benchmarks /results/pass-a-mock/benchmarks.json \
+                --trace /traces/otel.jsonl \
+                --format otel \
+                --backend mock \
+                --output /results/pass-a-mock/compare.csv
+          env:
+            - name: HOME
+              value: /home/guidellm
+            - name: PYTHONPATH
+              value: /hooks:/home/guidellm/.local
+            - name: GUIDELLM_PROFILE_DIR
+              value: /results/profiles
+            # Pass B only:
+            # - name: GUIDELLM_PROFILE
+            #   value: cprofile
+            # - name: GUIDELLM__MAX_WORKER_PROCESSES
+            #   value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 8Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /results
+              subPath: results
+            - name: data
+              mountPath: /traces
+              subPath: traces
+            - name: hooks
+              mountPath: /hooks
+              readOnly: true
+            - name: home
+              mountPath: /home/guidellm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: guidellm-trace-profile
+        - name: hooks
+          configMap:
+            name: guidellm-trace-profile
+        - name: home
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: guidellm-trace-profile-vllm
+  labels:
+    app.kubernetes.io/name: guidellm
+    app.kubernetes.io/component: trace-profile-vllm
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guidellm
+        app.kubernetes.io/component: trace-profile-vllm
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: guidellm
+          image: ghcr.io/vllm-project/guidellm:v0.7.3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              export PATH="/opt/app-root/bin:$PATH"
+              mkdir -p /results/pass-a-vllm /results/profiles
+              guidellm run \
+                --backend kind=openai_http \
+                --profile kind=replay,time_scale=1.0 \
+                --data kind=otel,source.kind=json_file,source.path=/traces/otel.jsonl,time_scale=1.0 \
+                --disable-progress \
+                --output kind=json,path=/results/pass-a-vllm/benchmarks.json
+              python /hooks/compare_replay_timings.py \
+                --benchmarks /results/pass-a-vllm/benchmarks.json \
+                --trace /traces/otel.jsonl \
+                --format otel \
+                --backend vllm \
+                --output /results/pass-a-vllm/compare.csv
+          env:
+            - name: HOME
+              value: /home/guidellm
+            - name: PYTHONPATH
+              value: /hooks:/home/guidellm/.local
+            - name: GUIDELLM_PROFILE_DIR
+              value: /results/profiles
+            - name: GUIDELLM__SPEC__BACKEND__TARGET
+              value: REPLACE_WITH_VLLM_SERVICE_URL
+            # - name: GUIDELLM__SPEC__BACKEND__API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: guidellm-backend
+            #       key: api-key
+          resources:
+            requests:
+              cpu: "8"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 8Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /results
+              subPath: results
+            - name: data
+              mountPath: /traces
+              subPath: traces
+            - name: hooks
+              mountPath: /hooks
+              readOnly: true
+            - name: home
+              mountPath: /home/guidellm
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: guidellm-trace-profile
+        - name: hooks
+          configMap:
+            name: guidellm-trace-profile
+        - name: home
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
